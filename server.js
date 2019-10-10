@@ -1,72 +1,106 @@
 'use strict';
 
+// environment variables
+
 require ('dotenv').config();
+
+// application dependencies
 
 const express = require('express');
 const cors = require('cors');
 const superagent = require('superagent');
+const pg = require('pg');
 
+// database setup
 
-const PORT = process.env.PORT;
+const client = new pg.Client(process.env.DATABASE_URL);
+client.connect();
+client.on('err', err => console.error(err));
+
+// application setup
+
 const app = express();
-
+const PORT = process.env.PORT;
 app.use(cors());
 
-app.get('/location', handleLocationRequest);
-app.get('/weather', handleWeatherRequest);
+// ROUTES
 
-app.listen(PORT, () => console.log('Listening on PORT', PORT));
+app.get('/location', handleLocation);
+app.get('/weather', handleWeather);
+app.get('/events', handleEvents);
+
+// INTERNAL MODULES
+
+const getLocation = require('/modules/location.js');
+const getWeather = require('/modules/weather.js');
+const getEvents = require('./modules.events');
+// const getMovies = require('./modules/events');
 
 
-function handleLocationRequest(request, response){
-    // TODO: create the url for the geocode API
-    // TODO: run a get request with superagent 
-    // TODO: send the response from superagent
-    const URL = `https://maps.googleapis.com/maps/api/geocode/json?address=${request.query.data}&key=${process.env.GEO_API_KEY}`;
-    // you can throw the url into a browser with your api key to make sure you're getting the data you want
-    return superagent.get(URL)
-    .then(res => {
-        console.log('response from geocode api', res.body);
-        const location = new Location(request.query.data, res.body);
+// ROUTE HANDLERS
 
-        response.send(location);
-      })
-    .catch(error =>{
-        handleError(error, response);
-      })
+function handleLocation(req, res){
+
+  getLocation(req.query.data, client, superagent)
+    .then(location => res.send(location))
+    .catch(err => handleError(err, res))
 }
 
-function Location(query, rawData){
-  //   this.query = query;
-  //   this.formatted_query = geoData.formatted_address;
-  //   this.latitude = geoData.geometry.location.lat;
-  //   this.longitude = geoData.geometry.location.lng;
+function handleWeather(req, res){
 
-    this.query = query;
-    this.formatted_query = rawData.results[0].formatted_address;
-    this.latitude = rawData.results[0].geometry.location.lat;
-    this.longitude = rawData.results[0].geometry.location.lng;
+  getWeather(req.query.data, client, superagent)
+  .then(data => res.send(data))
+  .catch(err => handleError(err, res))
 }
 
-function handleWeatherRequest(request, response){
-  try {
-    const data = require('./data/darksky.json');
-    const daySummaries = [];
-    data.daily.data.forEach(dayData => {
-      daySummaries.push(new Weather(dayData));
-  })
-  response.send(daySummaries);
-  } catch (error){
-    handleError(error, response);
-  }
+function handleEvents(req, res){
+
+  getEvents(req.query.data.formatted_address_query, client, superagent)
+  .then(data => res.send(data))
+  .catch(err => handleError(err, res))
+}
+
+// get data functions
+
+
+
+function getWeather(query, res){
+  const URL = `https://api.darksky.net/forecast/${process.env.DARK_SKY_API}/${query.data.latitude}.${query.data.longitude}`
+  return superagent.get(URL)
+  .then(res => res.body.daily.data.map(day => new Weather(day)))
+}
+
+function getEvents(query, res){
+  let URL = `https://www.eventbriteapi.com/v3/events/search?location.address=${query}&location.within=1km`
+  return superagent.get(URL)
+  .set('Authorization', `Bearer ${process.env.EVENT_BRITE}`)
+  .then(data => data.body.events.map(event => new Event(event)))
+}
+
+// constructor functions
+
+function Location(query, geoData){
+  this.search_query = query;
+  this.formatted_query = geoData.formatted_address;
+  this.latitude = geoData.geometry.location.lat;
+  this.longitude = geoData.geometry.location.lng;
 }
 
 function Weather(dayData){
   this.forecast = dayData.summary;
-  this.time = new Date(dayData.time * 1000).toString().slice(0,15);
+  this.time = new Date(dayData.time * 1000).toString().slice(0, 15);
 }
 
-function handleError(error, response) {
-  console.error(error);
-  response.status(500).send('Ruh Roh')
+function Event(event){
+  this.link = event.url;
+  this.name = event.name.text;
+  this.event_date = event.start.local;
+  this.summary = event.summary;
 }
+
+function handleError(error, response){
+  console.error(error);
+  response.status(500).send('ERROR');
+}
+
+app.listen(PORT, () => console.log(`App is lisitng on ${PORT}`));
